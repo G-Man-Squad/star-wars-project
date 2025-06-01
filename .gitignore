@@ -94,3 +94,5 @@ sp/src/devtools/gcc9+support.o
 /src/.vs
 /src/game/client/Release_mod_hl2
 /src/game/server/Release_mod_hl2
+*.pdb
+game/mod_hl2/bin
