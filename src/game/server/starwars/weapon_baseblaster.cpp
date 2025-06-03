@@ -42,7 +42,7 @@ BEGIN_DATADESC( CBaseBlasterBolt )
 
 END_DATADESC()
 
-CBaseBlasterBolt *CBaseBlasterBolt::BoltCreate( const Vector &vecOrigin, const QAngle &angAngles, CBasePlayer *pentOwner )
+CBaseBlasterBolt *CBaseBlasterBolt::BoltCreate( const Vector &vecOrigin, const QAngle &angAngles, CBaseCombatCharacter *pentOwner, int iDmg, int iType, int iClr )
 {
 	// Create a new entity with CBaseBlasterBolt private data
 	CBaseBlasterBolt *pBolt = (CBaseBlasterBolt *)CreateEntityByName( "blaster_bolt" );
@@ -50,8 +50,21 @@ CBaseBlasterBolt *CBaseBlasterBolt::BoltCreate( const Vector &vecOrigin, const Q
 	pBolt->SetAbsAngles( angAngles );
 	pBolt->Spawn();
 	pBolt->SetOwnerEntity( pentOwner );
+	pBolt->m_iBoltDmg = iDmg;
+	pBolt->m_iBoltType = iType;
+	pBolt->m_iBoltColor = iClr;
 
 	return pBolt;
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: 
+//-----------------------------------------------------------------------------
+CBaseBlasterBolt::CBaseBlasterBolt( void )
+{
+	m_iBoltDmg = 8;
+	m_iBoltType = 0;
+	m_iBoltColor = 0;
 }
 
 //-----------------------------------------------------------------------------
@@ -90,13 +103,12 @@ unsigned int CBaseBlasterBolt::PhysicsSolidMaskForEntity() const
 //-----------------------------------------------------------------------------
 bool CBaseBlasterBolt::CreateSprites( void )
 {
-	// Start up the eye glow
-	m_pGlowTrail = CSpriteTrail::SpriteTrailCreate("sprites/bluelaser1.vmt", GetLocalOrigin(), false);
+	m_pGlowTrail = CSpriteTrail::SpriteTrailCreate( g_pzsBlasterBoltTexture[m_iBoltColor][m_iBoltType], GetLocalOrigin(), false);
 
 	if ( m_pGlowTrail != NULL )
 	{
 		m_pGlowTrail->FollowEntity( this );
-		m_pGlowTrail->SetTransparency( kRenderTransAdd, 255, 0, 0, 255, kRenderFxNone );
+		//m_pGlowTrail->SetTransparency( kRenderTransAdd, 255, 0, 0, 255, kRenderFxNone );
 		m_pGlowTrail->SetStartWidth( 8.0f );
 		m_pGlowTrail->SetEndWidth( 8.0f );
 		m_pGlowTrail->SetLifeTime( 0.05f );
@@ -136,7 +148,13 @@ void CBaseBlasterBolt::Precache( void )
 {
 	PrecacheModel( "models/crossbow_bolt.mdl" );
 
-	PrecacheModel( "sprites/bluelaser1.vmt" );
+	for ( int i = 0; i < 3; i++)
+	{
+		for ( int i2 = 0; i2 < 3; i2++ )
+		{
+			PrecacheModel( g_pzsBlasterBoltTexture[i][i2] );
+		}
+	}
 }
 
 //-----------------------------------------------------------------------------
@@ -171,7 +189,7 @@ void CBaseBlasterBolt::BoltTouch( CBaseEntity *pOther )
 
 		if( GetOwnerEntity() && GetOwnerEntity()->IsPlayer() && pOther->IsNPC() )
 		{
-			CTakeDamageInfo	dmgInfo( this, GetOwnerEntity(), sk_plr_dmg_crossbow.GetFloat(), DMG_NEVERGIB );
+			CTakeDamageInfo	dmgInfo( this, GetOwnerEntity(), m_iBoltDmg, DMG_NEVERGIB );
 			dmgInfo.AdjustPlayerDamageInflictedForSkillLevel();
 			CalculateMeleeDamageForce( &dmgInfo, vecNormalizedVel, tr.endpos, 0.7f );
 			dmgInfo.SetDamagePosition( tr.endpos );
@@ -180,13 +198,13 @@ void CBaseBlasterBolt::BoltTouch( CBaseEntity *pOther )
 			CBasePlayer *pPlayer = ToBasePlayer( GetOwnerEntity() );
 			if ( pPlayer )
 			{
-				gamestats->Event_WeaponHit( pPlayer, true, "weapon_crossbow", dmgInfo );
+				gamestats->Event_WeaponHit( pPlayer, true, "weapon_baseblaster", dmgInfo );
 			}
 
 		}
 		else
 		{
-			CTakeDamageInfo	dmgInfo( this, GetOwnerEntity(), sk_plr_dmg_crossbow.GetFloat(), DMG_BULLET | DMG_NEVERGIB );
+			CTakeDamageInfo	dmgInfo( this, GetOwnerEntity(), m_iBoltDmg, DMG_BULLET | DMG_NEVERGIB );
 			CalculateMeleeDamageForce( &dmgInfo, vecNormalizedVel, tr.endpos, 0.7f );
 			dmgInfo.SetDamagePosition( tr.endpos );
 			pOther->DispatchTraceAttack( dmgInfo, vecNormalizedVel, &tr );
@@ -211,7 +229,19 @@ void CBaseBlasterBolt::BoltTouch( CBaseEntity *pOther )
 		SetAbsVelocity( Vector( 0, 0, 0 ) );
 
 		// play body "thwack" sound
-		EmitSound( "Weapon_BaseBlaster.BoltHitBody" );
+		const surfacedata_t *pdata = physprops->GetSurfaceData( tr.surface.surfaceProps );
+		if ( pdata->game.material == CHAR_TEX_METAL || pdata->game.material == CHAR_TEX_VENT || pdata->game.material == CHAR_TEX_GRATE )
+		{
+			EmitSound( "Weapon_BaseBlaster.BoltHitBody_Metal" );
+		}
+		else
+		{
+			EmitSound( "Weapon_BaseBlaster.BoltHitBody" );
+		}
+
+		g_pEffects->Sparks( GetAbsOrigin(), 1, 4, &tr.plane.normal );
+		g_pEffects->EnergySplash( GetAbsOrigin(), tr.plane.normal );
+		UTIL_Smoke( GetAbsOrigin(), RandomFloat(15,20), 10 );
 
 		SetTouch( NULL );
 		SetThink( NULL );
@@ -226,8 +256,19 @@ void CBaseBlasterBolt::BoltTouch( CBaseEntity *pOther )
 		// See if we struck the world
 		if ( pOther->GetMoveType() == MOVETYPE_NONE && !( tr.surface.flags & SURF_SKY ) )
 		{
-			EmitSound( "Weapon_BaseBlaster.BoltHitWorld" );
-
+			const surfacedata_t *pdata = physprops->GetSurfaceData( tr.surface.surfaceProps );
+			if ( pdata->game.material == CHAR_TEX_DIRT || pdata->game.material == CHAR_TEX_SAND || pdata->game.material == CHAR_TEX_FOLIAGE )
+			{
+				EmitSound( "Weapon_BaseBlaster.BoltHitWorld_Dirt" );
+			}
+			else if ( pdata->game.material == CHAR_TEX_METAL || pdata->game.material == CHAR_TEX_VENT || pdata->game.material == CHAR_TEX_GRATE )
+			{
+				EmitSound( "Weapon_BaseBlaster.BoltHitWorld_Metal" );
+			}
+			else
+			{
+				EmitSound( "Weapon_BaseBlaster.BoltHitWorld_Stone" );
+			}
 			/*
 			// if what we hit is static architecture, can stay around for a while.
 			Vector vecDir = GetAbsVelocity();
@@ -262,7 +303,9 @@ void CBaseBlasterBolt::BoltTouch( CBaseEntity *pOther )
 			// Shoot some sparks
 			if ( UTIL_PointContents( GetAbsOrigin() ) != CONTENTS_WATER)
 			{
-				g_pEffects->Sparks( GetAbsOrigin() );
+				g_pEffects->Sparks( GetAbsOrigin(), 1, 4, &tr.plane.normal );
+				g_pEffects->EnergySplash( GetAbsOrigin(), tr.plane.normal );
+				UTIL_Smoke( GetAbsOrigin(), RandomFloat(15,20), 10 );
 			}
 		}
 		else
@@ -304,10 +347,84 @@ LINK_ENTITY_TO_CLASS( weapon_baseblaster, CWeaponBaseBlaster );
 PRECACHE_WEAPON_REGISTER( weapon_baseblaster );
 
 IMPLEMENT_SERVERCLASS_ST( CWeaponBaseBlaster, DT_WeaponBaseBlaster )
+	SendPropFloat(	SENDINFO(m_flBlaster_HeatCurrent) ),
+	SendPropFloat(	SENDINFO(m_flBlaster_HeatMax)	),
+	SendPropFloat(	SENDINFO(m_flBlaster_CoolingTime)	),
+	SendPropBool(	SENDINFO(m_bBlaster_Cooling)	),
 END_SEND_TABLE()
 
 BEGIN_DATADESC( CWeaponBaseBlaster )
+
+	DEFINE_FIELD( m_flBlaster_FireRate, FIELD_FLOAT ),
+	DEFINE_FIELD( m_flBlaster_Kickback, FIELD_FLOAT ),
+	DEFINE_FIELD( m_flBlaster_Autoaim,	FIELD_FLOAT ),
+	DEFINE_FIELD( m_flBlaster_HeatCurrent, FIELD_FLOAT ),
+	DEFINE_FIELD( m_flBlaster_HeatAdd,	FIELD_FLOAT ),
+	DEFINE_FIELD( m_flBlaster_HeatSub,	FIELD_FLOAT ),
+	DEFINE_FIELD( m_flBlaster_HeatMax,	FIELD_FLOAT ),
+	DEFINE_FIELD( m_flBlaster_HeatTime, FIELD_FLOAT ),
+	DEFINE_FIELD( m_bBlaster_Cooling,	FIELD_BOOLEAN ),
+	DEFINE_FIELD( m_iBlaster_BoltSpeed, FIELD_INTEGER ),
+	DEFINE_FIELD( m_iBlaster_BoltDmg,	FIELD_INTEGER ),
+	DEFINE_FIELD( m_iBlaster_BoltType,	FIELD_INTEGER ),
+	DEFINE_FIELD( m_iBlaster_BoltClr,	FIELD_INTEGER ),
+	DEFINE_FIELD( m_flBlaster_CoolingTime, FIELD_FLOAT ),
+
 END_DATADESC()
+
+acttable_t	CWeaponBaseBlaster::m_acttable[] =
+{
+	{ ACT_RANGE_ATTACK1,			ACT_RANGE_ATTACK_AR2,			true },
+	{ ACT_RELOAD,					ACT_RELOAD_SMG1,				true },		// FIXME: hook to AR2 unique
+	{ ACT_IDLE,						ACT_IDLE_SMG1,					true },		// FIXME: hook to AR2 unique
+	{ ACT_IDLE_ANGRY,				ACT_IDLE_ANGRY_SMG1,			true },		// FIXME: hook to AR2 unique
+
+	{ ACT_WALK,						ACT_WALK_RIFLE,					true },
+
+// Readiness activities (not aiming)
+	{ ACT_IDLE_RELAXED,				ACT_IDLE_SMG1_RELAXED,			false },//never aims
+	{ ACT_IDLE_STIMULATED,			ACT_IDLE_SMG1_STIMULATED,		false },
+	{ ACT_IDLE_AGITATED,			ACT_IDLE_ANGRY_SMG1,			false },//always aims
+
+	{ ACT_WALK_RELAXED,				ACT_WALK_RIFLE_RELAXED,			false },//never aims
+	{ ACT_WALK_STIMULATED,			ACT_WALK_RIFLE_STIMULATED,		false },
+	{ ACT_WALK_AGITATED,			ACT_WALK_AIM_RIFLE,				false },//always aims
+
+	{ ACT_RUN_RELAXED,				ACT_RUN_RIFLE_RELAXED,			false },//never aims
+	{ ACT_RUN_STIMULATED,			ACT_RUN_RIFLE_STIMULATED,		false },
+	{ ACT_RUN_AGITATED,				ACT_RUN_AIM_RIFLE,				false },//always aims
+
+// Readiness activities (aiming)
+	{ ACT_IDLE_AIM_RELAXED,			ACT_IDLE_SMG1_RELAXED,			false },//never aims	
+	{ ACT_IDLE_AIM_STIMULATED,		ACT_IDLE_AIM_RIFLE_STIMULATED,	false },
+	{ ACT_IDLE_AIM_AGITATED,		ACT_IDLE_ANGRY_SMG1,			false },//always aims
+
+	{ ACT_WALK_AIM_RELAXED,			ACT_WALK_RIFLE_RELAXED,			false },//never aims
+	{ ACT_WALK_AIM_STIMULATED,		ACT_WALK_AIM_RIFLE_STIMULATED,	false },
+	{ ACT_WALK_AIM_AGITATED,		ACT_WALK_AIM_RIFLE,				false },//always aims
+
+	{ ACT_RUN_AIM_RELAXED,			ACT_RUN_RIFLE_RELAXED,			false },//never aims
+	{ ACT_RUN_AIM_STIMULATED,		ACT_RUN_AIM_RIFLE_STIMULATED,	false },
+	{ ACT_RUN_AIM_AGITATED,			ACT_RUN_AIM_RIFLE,				false },//always aims
+//End readiness activities
+
+	{ ACT_WALK_AIM,					ACT_WALK_AIM_RIFLE,				true },
+	{ ACT_WALK_CROUCH,				ACT_WALK_CROUCH_RIFLE,			true },
+	{ ACT_WALK_CROUCH_AIM,			ACT_WALK_CROUCH_AIM_RIFLE,		true },
+	{ ACT_RUN,						ACT_RUN_RIFLE,					true },
+	{ ACT_RUN_AIM,					ACT_RUN_AIM_RIFLE,				true },
+	{ ACT_RUN_CROUCH,				ACT_RUN_CROUCH_RIFLE,			true },
+	{ ACT_RUN_CROUCH_AIM,			ACT_RUN_CROUCH_AIM_RIFLE,		true },
+	{ ACT_GESTURE_RANGE_ATTACK1,	ACT_GESTURE_RANGE_ATTACK_AR2,	false },
+	{ ACT_COVER_LOW,				ACT_COVER_SMG1_LOW,				false },		// FIXME: hook to AR2 unique
+	{ ACT_RANGE_AIM_LOW,			ACT_RANGE_AIM_AR2_LOW,			false },
+	{ ACT_RANGE_ATTACK1_LOW,		ACT_RANGE_ATTACK_SMG1_LOW,		true },		// FIXME: hook to AR2 unique
+	{ ACT_RELOAD_LOW,				ACT_RELOAD_SMG1_LOW,			false },
+	{ ACT_GESTURE_RELOAD,			ACT_GESTURE_RELOAD_SMG1,		true },
+//	{ ACT_RANGE_ATTACK2, ACT_RANGE_ATTACK_AR2_GRENADE, true },
+};
+
+IMPLEMENT_ACTTABLE(CWeaponBaseBlaster);
 
 //-----------------------------------------------------------------------------
 // Purpose: Constructor
@@ -316,6 +433,13 @@ CWeaponBaseBlaster::CWeaponBaseBlaster( void )
 {
 	m_bReloadsSingly	= false;
 	m_bFiresUnderwater	= false;
+
+	m_bBlaster_Cooling = false;
+	m_flBlaster_CoolingTime = 0.0f; // How long the blaster waits before cooling
+
+	m_flBlaster_LastShot = 0.0f; // What was the last time the blaster fired
+
+	// MOVE TO SCRIPT
 
 	m_flBlaster_FireRate = 0.35f; // How much delay between shots
 	m_flBlaster_Kickback = 1.0f; // How much kickback (default 1.0f)
@@ -327,8 +451,10 @@ CWeaponBaseBlaster::CWeaponBaseBlaster( void )
 	m_flBlaster_HeatMax = 1.0f; // How much heat can the blaster handle
 	m_flBlaster_HeatTime = 3.0f; // How long the blaster waits before cooling
 
-	m_bBlaster_Cooling = false;
-	m_flBlaster_CoolingTime = 0.0f; // How long the blaster waits before cooling
+	m_iBlaster_BoltSpeed = 3000;
+	m_iBlaster_BoltDmg = 8;
+	m_iBlaster_BoltType = 0;
+	m_iBlaster_BoltClr = 0;
 }
 
 //-----------------------------------------------------------------------------
@@ -339,7 +465,10 @@ void CWeaponBaseBlaster::Precache( void )
 	UTIL_PrecacheOther( "blaster_bolt" );
 
 	PrecacheScriptSound( "Weapon_BaseBlaster.BoltHitBody" );
-	PrecacheScriptSound( "Weapon_BaseBlaster.BoltHitWorld" );
+	PrecacheScriptSound( "Weapon_BaseBlaster.BoltHitBody_Metal" );
+	PrecacheScriptSound( "Weapon_BaseBlaster.BoltHitWorld_Dirt" );
+	PrecacheScriptSound( "Weapon_BaseBlaster.BoltHitWorld_Metal" );
+	PrecacheScriptSound( "Weapon_BaseBlaster.BoltHitWorld_Stone" );
 
 	BaseClass::Precache();
 }
@@ -356,21 +485,99 @@ void CWeaponBaseBlaster::Operator_HandleAnimEvent( animevent_t *pEvent, CBaseCom
 		case EVENT_WEAPON_RELOAD:
 			{
 				// Add Smoke Effect
-				/*
 				CEffectData data;
 
 				// Emit six spent shells
 				for ( int i = 0; i < 6; i++ )
 				{
-					data.m_vOrigin = pOwner->WorldSpaceCenter() + RandomVector( -4, 4 );
+					data.m_vOrigin = pOperator->WorldSpaceCenter() + RandomVector( -4, 4 );
 					data.m_vAngles = QAngle( 90, random->RandomInt( 0, 360 ), 0 );
 					data.m_nEntIndex = entindex();
 
 					DispatchEffect( "ShellEject", data );
 				}
-				*/
 				break;
 			}
+		case EVENT_WEAPON_AR2:
+		case EVENT_WEAPON_SMG1:
+			{
+				CAI_BaseNPC *pNPC = pOperator->MyNPCPointer();
+				Assert(pNPC);
+
+				Operator_ForceNPCFire( GetOwner(), false );
+
+				break;
+			}
+	}
+}
+
+
+//-----------------------------------------------------------------------------
+// Purpose: 
+// Input  : *pOperator - 
+//-----------------------------------------------------------------------------
+void CWeaponBaseBlaster::FireNPCPrimaryAttack( CBaseCombatCharacter *pOperator, bool bUseWeaponAngles )
+{
+	Vector vecSrc, vecAiming;
+
+	CAI_BaseNPC *npc = pOperator->MyNPCPointer();
+	ASSERT( npc != NULL );
+
+	if ( bUseWeaponAngles )
+	{
+		QAngle	angAiming;
+		GetAttachment( LookupAttachment( "muzzle" ), vecSrc, angAiming );
+		AngleVectors( angAiming, &vecAiming );
+		
+		CBaseBlasterBolt *pBolt = CBaseBlasterBolt::BoltCreate( vecSrc, angAiming, npc, m_iBlaster_BoltDmg, m_iBlaster_BoltType, m_iBlaster_BoltClr );
+		pBolt->SetAbsVelocity( vecAiming * m_iBlaster_BoltSpeed );
+
+		g_pEffects->MetalSparks( vecSrc, vecAiming );
+	}
+	else 
+	{
+		vecSrc = pOperator->Weapon_ShootPosition();
+		vecAiming = npc->GetActualShootTrajectory( vecSrc );
+		QAngle	angAiming;
+		AngleVectors( angAiming, &vecAiming);
+		
+		CBaseBlasterBolt *pBolt = CBaseBlasterBolt::BoltCreate( vecSrc, angAiming, npc, m_iBlaster_BoltDmg, m_iBlaster_BoltType, m_iBlaster_BoltClr );
+		pBolt->SetAbsVelocity( vecAiming * m_iBlaster_BoltSpeed );
+
+		g_pEffects->MetalSparks( vecSrc, vecAiming );
+	}
+
+	BlasterHeatingChange( m_flBlaster_HeatAdd );
+	m_flBlaster_LastShot = gpGlobals->curtime + ( 5 * GetFireRate() );
+
+	WeaponSound( SINGLE_NPC );
+
+	CSoundEnt::InsertSound( SOUND_COMBAT|SOUND_CONTEXT_GUNFIRE, pOperator->GetAbsOrigin(), SOUNDENT_VOLUME_MACHINEGUN, 0.2, pOperator, SOUNDENT_CHANNEL_WEAPON, pOperator->GetEnemy() );
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: 
+//-----------------------------------------------------------------------------
+void CWeaponBaseBlaster::FireNPCSecondaryAttack( CBaseCombatCharacter *pOperator, bool bUseWeaponAngles )
+{
+	// STUB
+}
+
+//-----------------------------------------------------------------------------
+// Purpose: 
+//-----------------------------------------------------------------------------
+void CWeaponBaseBlaster::Operator_ForceNPCFire( CBaseCombatCharacter *pOperator, bool bSecondary )
+{
+	if ( m_bBlaster_Cooling )
+		return;
+
+	if ( bSecondary )
+	{
+		FireNPCSecondaryAttack( pOperator, true );
+	}
+	else
+	{
+		FireNPCPrimaryAttack( pOperator, true );
 	}
 }
 
@@ -384,7 +591,7 @@ void CWeaponBaseBlaster::PrimaryAttack( void )
 	if ( pOwner == NULL )
 		return;
 
-	if ( BlasterIsCoolingOff() )
+	if ( m_bBlaster_Cooling )
 		return;
 
 	pOwner->RumbleEffect( RUMBLE_AR2, 0, RUMBLE_FLAG_RESTART );
@@ -410,10 +617,10 @@ void CWeaponBaseBlaster::PrimaryAttack( void )
 	pOwner->EyeVectors( &vForward, &vRight, &vUp );
 	Vector vecMuzzle	= vecSrc + vForward * 2.0f + vRight * 6.0f + vUp * -4.0f;
 
-	CBaseBlasterBolt *pBolt = CBaseBlasterBolt::BoltCreate( vecSrc, angAiming, pOwner );
-	pBolt->SetAbsVelocity( vecAiming * 2500 );
+	CBaseBlasterBolt *pBolt = CBaseBlasterBolt::BoltCreate( vecSrc, angAiming, pOwner, m_iBlaster_BoltDmg, m_iBlaster_BoltType, m_iBlaster_BoltClr );
+	pBolt->SetAbsVelocity( vecAiming * m_iBlaster_BoltSpeed );
 
-	pOwner->ViewPunch( QAngle( -2, 0, 0 ) * BlasterGetKickback() );
+	pOwner->ViewPunch( QAngle( -2, 0, 0 ) * m_flBlaster_Kickback );
 
 	WeaponSound( SINGLE );
 
@@ -427,38 +634,42 @@ void CWeaponBaseBlaster::PrimaryAttack( void )
 		pOwner->SetSuitUpdate("!HEV_AMO0", FALSE, 0);
 	}
 
-	BlasterHeatingChange( BlasterGetHeatingAdd() );
+	BlasterHeatingChange( m_flBlaster_HeatAdd );
 
 	m_flNextPrimaryAttack = m_flNextSecondaryAttack	= gpGlobals->curtime + GetFireRate();
+	m_flBlaster_LastShot = gpGlobals->curtime + ( 5 * GetFireRate() );
 }
-
-
 
 //-----------------------------------------------------------------------------
 // Purpose: 
 //-----------------------------------------------------------------------------
 void CWeaponBaseBlaster::ItemPostFrame( void )
 {
-	if ( BlasterIsCoolingOff() && gpGlobals->curtime >= m_flBlaster_CoolingTime )
+	if ( m_bBlaster_Cooling && gpGlobals->curtime >= m_flBlaster_CoolingTime )
 	{
-		if ( BlasterGetHeatingAmount() >= BlasterGetHeatingMax() )
+		if ( m_flBlaster_HeatCurrent >= m_flBlaster_HeatMax )
 			WeaponSound( RELOAD );
 
-		if ( BlasterGetHeatingAmount() > 0.0f )
+		if ( m_flBlaster_HeatCurrent > 0.0f )
 		{
-			BlasterHeatingChange( -BlasterGetHeatingSub() );
+			BlasterHeatingChange( -m_flBlaster_HeatSub );
 		}
 		else
 		{
 			BlasterSetIsCoolingOff( false );
 		}
 	}
-	else if ( BlasterGetHeatingAmount() >= BlasterGetHeatingMax() )
+	else if ( m_flBlaster_HeatCurrent > 0.0f )
 	{
-		if ( !BlasterIsCoolingOff() )
+		if ( m_flBlaster_HeatCurrent >= m_flBlaster_HeatMax && !m_bBlaster_Cooling )
 		{
 			BlasterSetIsCoolingOff( true );
-			m_flBlaster_CoolingTime = gpGlobals->curtime + BlasterGetHeatingTime();
+			m_flBlaster_CoolingTime = gpGlobals->curtime + m_flBlaster_HeatTime;
+		}
+		else if ( gpGlobals->curtime >= m_flBlaster_LastShot )
+		{
+			BlasterHeatingChange( -m_flBlaster_HeatSub );
+			m_flBlaster_LastShot = gpGlobals->curtime + GetFireRate();
 		}
 	}
 
